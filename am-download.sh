@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# SoundCloud / Instagram / X downloader
-# Usage: ./sc-download.sh <soundcloud_instagram_or_x_url>
+# Music and social audio downloader
+# Usage: ./am-download.sh <supported_url>
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -10,8 +10,9 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 usage() {
-    echo "Usage: $0 <soundcloud_instagram_or_x_url>"
+    echo "Usage: $0 <supported_url>"
     echo "  SoundCloud: downloads a track or playlist and converts to M4A with cover art."
+    echo "  Music: supports public Bandcamp, Audiomack, Mixcloud, HearThisAt, and Vocaroo links."
     echo "  Instagram: extracts audio from post/reel/video media and converts to M4A."
     echo "  X/Twitter: extracts audio from post video media and converts to M4A."
     exit 1
@@ -58,6 +59,16 @@ URL="$1"
 PLATFORM="unknown"
 if [[ "$URL" == *"soundcloud.com"* ]]; then
     PLATFORM="soundcloud"
+elif [[ "$URL" == *"bandcamp.com"* ]]; then
+    PLATFORM="bandcamp"
+elif [[ "$URL" == *"audiomack.com"* ]]; then
+    PLATFORM="audiomack"
+elif [[ "$URL" == *"mixcloud.com"* ]]; then
+    PLATFORM="mixcloud"
+elif [[ "$URL" == *"hearthis.at"* ]]; then
+    PLATFORM="hearthisat"
+elif [[ "$URL" == *"vocaroo.com"* || "$URL" == *"voca.ro"* ]]; then
+    PLATFORM="vocaroo"
 elif [[ "$URL" == *"instagram.com"* || "$URL" == *"instagr.am"* ]]; then
     PLATFORM="instagram"
 elif [[ "$URL" == *"x.com"* || "$URL" == *"twitter.com"* ]]; then
@@ -65,7 +76,7 @@ elif [[ "$URL" == *"x.com"* || "$URL" == *"twitter.com"* ]]; then
 fi
 
 if [[ "$PLATFORM" == "unknown" ]]; then
-    echo -e "${YELLOW}Warning: URL does not appear to be a SoundCloud, Instagram, or X/Twitter link.${NC}"
+    echo -e "${YELLOW}Warning: URL does not appear to be one of the app's tested sources.${NC}"
 fi
 
 check_deps "$PLATFORM"

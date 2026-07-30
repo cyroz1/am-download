@@ -60,7 +60,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("AM Download")
                     .font(.title2.weight(.semibold))
-                Text("Create tagged M4A files for your Apple Music library")
+                Text("Create tagged M4A files for Apple Music")
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -71,7 +71,7 @@ struct ContentView: View {
     private var sourceSection: some View {
         FormSection(title: "Source", systemImage: "link") {
             HStack {
-                TextField("Paste a SoundCloud, Instagram, or X URL", text: $model.urlString)
+                TextField("Paste a supported music or social link", text: $model.urlString)
                     .textFieldStyle(.roundedBorder)
                     .focused($urlIsFocused)
                     .onSubmit { model.startDownload() }
@@ -84,6 +84,9 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Text("SoundCloud · Bandcamp · Audiomack · Mixcloud · HearThisAt · Vocaroo · Instagram · X")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
     }
 
@@ -456,6 +459,22 @@ final class DownloadModel: ObservableObject {
         }
         if host == "soundcloud.com" || host.hasSuffix(".soundcloud.com") {
             return "SoundCloud"
+        }
+        if host == "bandcamp.com" || host.hasSuffix(".bandcamp.com") {
+            return "Bandcamp"
+        }
+        if host == "audiomack.com" || host.hasSuffix(".audiomack.com") {
+            return "Audiomack"
+        }
+        if host == "mixcloud.com" || host.hasSuffix(".mixcloud.com") {
+            return "Mixcloud"
+        }
+        if host == "hearthis.at" || host.hasSuffix(".hearthis.at") {
+            return "HearThisAt"
+        }
+        if host == "vocaroo.com" || host.hasSuffix(".vocaroo.com")
+            || host == "voca.ro" || host.hasSuffix(".voca.ro") {
+            return "Vocaroo"
         }
         if host == "instagram.com" || host.hasSuffix(".instagram.com")
             || host == "instagr.am" || host.hasSuffix(".instagr.am") {
