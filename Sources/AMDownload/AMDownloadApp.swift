@@ -40,6 +40,7 @@ struct ContentView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
+            model.autoPasteSupportedURL()
             urlIsFocused = true
             model.refreshDependencies()
         }
@@ -59,7 +60,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("AM Download")
                     .font(.title2.weight(.semibold))
-                Text("Save audio from SoundCloud, Instagram, and X")
+                Text("Create tagged M4A files for your Apple Music library")
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -96,17 +97,31 @@ struct ContentView: View {
                 metadataRow("Artist", text: $model.artist)
                 metadataRow("Album", text: $model.album)
                 metadataRow("Album Artist", text: $model.albumArtist)
+                metadataRow("Genre", text: $model.genre)
             }
-            Toggle("Mark as explicit", isOn: $model.isExplicit)
+            DisclosureGroup("More Apple Music tags", isExpanded: $model.showMoreTags) {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                    metadataRow("Composer", text: $model.composer)
+                    metadataRow("Release Date", text: $model.releaseDate, prompt: "Keep source value (e.g. 2026)")
+                    metadataRow("Track", text: $model.trackNumber, prompt: "Keep source value (e.g. 3/12)")
+                    metadataRow("Disc", text: $model.discNumber, prompt: "Keep source value (e.g. 1/2)")
+                }
+                .padding(.top, 10)
+            }
+            Toggle("Mark as explicit (off keeps the source value)", isOn: $model.isExplicit)
         }
     }
 
-    private func metadataRow(_ label: String, text: Binding<String>) -> some View {
+    private func metadataRow(
+        _ label: String,
+        text: Binding<String>,
+        prompt: String = "Keep source value"
+    ) -> some View {
         GridRow {
             Text(label)
                 .foregroundStyle(.secondary)
                 .frame(width: 82, alignment: .trailing)
-            TextField("Keep source value", text: text)
+            TextField(prompt, text: text)
                 .textFieldStyle(.roundedBorder)
         }
     }
@@ -200,6 +215,12 @@ final class DownloadModel: ObservableObject {
     @Published var artist = ""
     @Published var album = ""
     @Published var albumArtist = ""
+    @Published var genre = ""
+    @Published var composer = ""
+    @Published var releaseDate = ""
+    @Published var trackNumber = ""
+    @Published var discNumber = ""
+    @Published var showMoreTags = false
     @Published var isExplicit = false
     @Published var outputDirectory: URL
     @Published var log = ""
@@ -217,11 +238,8 @@ final class DownloadModel: ObservableObject {
     }
 
     var detectedPlatform: String? {
-        let value = urlString.lowercased()
-        if value.contains("soundcloud.com") { return "SoundCloud link detected" }
-        if value.contains("instagram.com") || value.contains("instagr.am") { return "Instagram link detected" }
-        if value.contains("x.com") || value.contains("twitter.com") { return "X link detected" }
-        return nil
+        guard let platform = platformName(for: urlString) else { return nil }
+        return "\(platform) link detected"
     }
 
     var dependenciesReady: Bool { missingDependencies.isEmpty }
@@ -237,6 +255,17 @@ final class DownloadModel: ObservableObject {
     func pasteURL() {
         if let pasted = NSPasteboard.general.string(forType: .string) {
             urlString = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    func autoPasteSupportedURL() {
+        guard urlString.isEmpty,
+              let pasted = NSPasteboard.general.string(forType: .string) else {
+            return
+        }
+        let candidate = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        if platformName(for: candidate) != nil {
+            urlString = candidate
         }
     }
 
@@ -260,6 +289,14 @@ final class DownloadModel: ObservableObject {
               let scheme = parsedURL.scheme?.lowercased(),
               scheme == "https" || scheme == "http" else {
             presentError("Enter a valid web URL.")
+            return
+        }
+        guard isValidIndex(trackNumber) else {
+            presentError("Track must be a number or number/total, such as 3 or 3/12.")
+            return
+        }
+        guard isValidIndex(discNumber) else {
+            presentError("Disc must be a number or number/total, such as 1 or 1/2.")
             return
         }
 
@@ -302,6 +339,11 @@ final class DownloadModel: ObservableObject {
         if !artist.isEmpty { tagArguments.append(("--artist", artist)) }
         if !album.isEmpty { tagArguments.append(("--album", album)) }
         if !albumArtist.isEmpty { tagArguments.append(("--albumArtist", albumArtist)) }
+        if !genre.isEmpty { tagArguments.append(("--genre", genre)) }
+        if !composer.isEmpty { tagArguments.append(("--composer", composer)) }
+        if !releaseDate.isEmpty { tagArguments.append(("--year", releaseDate)) }
+        if !trackNumber.isEmpty { tagArguments.append(("--tracknum", trackNumber)) }
+        if !discNumber.isEmpty { tagArguments.append(("--disk", discNumber)) }
         if isExplicit { tagArguments.append(("--advisory", "explicit")) }
 
         if !tagArguments.isEmpty {
@@ -403,5 +445,31 @@ final class DownloadModel: ObservableObject {
 
     private func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func platformName(for value: String) -> String? {
+        guard let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              let host = url.host?.lowercased() else {
+            return nil
+        }
+        if host == "soundcloud.com" || host.hasSuffix(".soundcloud.com") {
+            return "SoundCloud"
+        }
+        if host == "instagram.com" || host.hasSuffix(".instagram.com")
+            || host == "instagr.am" || host.hasSuffix(".instagr.am") {
+            return "Instagram"
+        }
+        if host == "x.com" || host.hasSuffix(".x.com")
+            || host == "twitter.com" || host.hasSuffix(".twitter.com") {
+            return "X"
+        }
+        return nil
+    }
+
+    private func isValidIndex(_ value: String) -> Bool {
+        if value.isEmpty { return true }
+        return value.range(of: #"^\d+(\/\d+)?$"#, options: .regularExpression) != nil
     }
 }

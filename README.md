@@ -1,12 +1,17 @@
 # AM Download
 
-A small native macOS front end for `am-download.sh`. It downloads audio from
-SoundCloud, Instagram, and X/Twitter as M4A, with optional metadata and an
-explicit-content flag.
+A small native macOS front end for `am-download.sh`. It creates tagged M4A
+files from SoundCloud, Instagram, and X/Twitter for addition to an Apple Music
+library.
 
 Available source metadata, artwork, and chapters are embedded automatically.
 Metadata fields left blank preserve the source values; a value entered in the
-app replaces only that specific field.
+app replaces only that specific field. Overrides are available for title,
+artist, album, album artist, genre, composer, release date, track number, disc
+number, and the explicit-content advisory.
+
+On launch, the app automatically fills the source field when the clipboard
+contains a valid SoundCloud, Instagram, or X/Twitter link.
 
 ## Requirements
 
