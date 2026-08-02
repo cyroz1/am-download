@@ -22,7 +22,9 @@
 namespace {
 
 constexpr wchar_t kProductName[] = L"AM Download";
+constexpr wchar_t kProductVersion[] = L"1.0.2";
 constexpr wchar_t kUninstallKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AM Download";
+constexpr int kApplicationPayloadResource = 200;
 
 std::wstring Lowercase(std::wstring value) {
     std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
@@ -57,12 +59,6 @@ std::filesystem::path KnownFolderPath(REFKNOWNFOLDERID folderId) {
     std::filesystem::path result(rawPath);
     CoTaskMemFree(rawPath);
     return result;
-}
-
-bool IsFile(const std::filesystem::path& path) {
-    std::error_code error;
-    const auto status = std::filesystem::status(path, error);
-    return !error && std::filesystem::is_regular_file(status);
 }
 
 bool EnsureDirectory(const std::filesystem::path& path, std::wstring& errorMessage) {
@@ -100,6 +96,41 @@ bool CopyDirectory(const std::filesystem::path& source, const std::filesystem::p
                 return false;
             }
         }
+    }
+    return true;
+}
+
+bool ExtractApplicationPayload(HINSTANCE instance, const std::filesystem::path& destination,
+    std::wstring& errorMessage) {
+    HRSRC resource = FindResourceW(instance, MAKEINTRESOURCEW(kApplicationPayloadResource), RT_RCDATA);
+    if (!resource) {
+        errorMessage = L"The installer payload resource could not be found. Windows error " + std::to_wstring(GetLastError());
+        return false;
+    }
+
+    HGLOBAL loaded = LoadResource(instance, resource);
+    const DWORD size = SizeofResource(instance, resource);
+    const void* data = loaded ? LockResource(loaded) : nullptr;
+    if (!loaded || !data || size == 0) {
+        errorMessage = L"The installer payload could not be loaded. Windows error " + std::to_wstring(GetLastError());
+        return false;
+    }
+
+    HANDLE file = CreateFileW(destination.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        errorMessage = L"Could not create AMDownload.exe. Windows error " + std::to_wstring(GetLastError());
+        return false;
+    }
+
+    DWORD written = 0;
+    const bool success = WriteFile(file, data, size, &written, nullptr) && written == size;
+    const DWORD writeError = success ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(file);
+    if (!success) {
+        DeleteFileW(destination.c_str());
+        errorMessage = L"Could not extract AMDownload.exe. Windows error " + std::to_wstring(writeError);
+        return false;
     }
     return true;
 }
@@ -163,7 +194,7 @@ bool WriteRegistry(const std::filesystem::path& installDirectory, std::wstring& 
     const std::wstring installPath = installDirectory.wstring();
     const std::wstring displayIcon = (installDirectory / L"AMDownload.exe").wstring();
     const std::wstring publisher = L"AM Download";
-    const std::wstring version = L"1.0.0";
+    const std::wstring version = kProductVersion;
     const DWORD one = 1;
 
     auto writeString = [&](const wchar_t* name, const std::wstring& value) {
@@ -185,23 +216,17 @@ bool WriteRegistry(const std::filesystem::path& installDirectory, std::wstring& 
     return success;
 }
 
-bool Install(std::wstring& errorMessage) {
+bool Install(HINSTANCE instance, std::wstring& errorMessage) {
     const std::filesystem::path sourceDirectory = ModuleDirectory();
-    const std::filesystem::path sourceApplication = sourceDirectory / L"AMDownload.exe";
     const std::filesystem::path sourceInstaller = ModulePath();
     const std::filesystem::path targetDirectory = InstallDirectory();
     const std::filesystem::path targetApplication = targetDirectory / L"AMDownload.exe";
     const std::filesystem::path targetUninstaller = targetDirectory / L"Uninstall.exe";
 
-    if (!IsFile(sourceApplication)) {
-        errorMessage = L"The installer payload is incomplete. AMDownload.exe was not found next to the installer.";
-        return false;
-    }
     if (!EnsureDirectory(targetDirectory, errorMessage)) {
         return false;
     }
-    if (!CopyFileW(sourceApplication.c_str(), targetApplication.c_str(), FALSE)) {
-        errorMessage = L"Could not install AMDownload.exe. Windows error " + std::to_wstring(GetLastError());
+    if (!ExtractApplicationPayload(instance, targetApplication, errorMessage)) {
         return false;
     }
 
@@ -259,7 +284,7 @@ bool HasArgument(int argc, LPWSTR* argv, const wchar_t* expected) {
 
 } // namespace
 
-int APIENTRY wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -270,7 +295,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
 
     std::wstring errorMessage;
-    const bool success = uninstall ? Uninstall(errorMessage) : Install(errorMessage);
+    const bool success = uninstall ? Uninstall(errorMessage) : Install(instance, errorMessage);
     if (SUCCEEDED(comResult)) {
         CoUninitialize();
     }
