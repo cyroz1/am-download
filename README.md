@@ -1,8 +1,8 @@
 # AM Download
 
-A small native macOS front end for `am-download.sh`. It creates tagged M4A
-files from public music and social sources for addition to an Apple Music
-library.
+Native macOS and Windows front ends for `am-download.sh`. AM Download creates
+tagged M4A files from public music and social sources for addition to an Apple
+Music library.
 
 Tested sources:
 
@@ -46,3 +46,47 @@ The native application is created at `build/AM Download.app`. Move it to
 `/Applications` if desired. The app is ad-hoc signed for local use.
 
 The original `am-download.sh` remains available for terminal use.
+
+## Windows
+
+The Windows port is a native Win32 desktop executable. It keeps the same
+source detection, clipboard paste, metadata overrides, folder selection,
+progress log, cancellation, and M4A post-processing workflow as the macOS
+app.
+
+Requirements:
+
+- Windows 10 or newer
+- Visual Studio with the Desktop development with C++ workload (to build)
+- `yt-dlp.exe`, `ffmpeg.exe`, and `AtomicParsley.exe`
+
+The Windows app searches for the command-line tools in its own folder, a
+`tools` subfolder, and the system `PATH`. Build it from PowerShell with:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\build-windows.ps1
+```
+
+The executable is created at `build\windows\AMDownload.exe`. The app does not
+bundle the third-party command-line tools, so copy them into `build\windows\tools`
+or add their directory to `PATH` before downloading.
+
+To build the Windows installer, run the same command. It creates
+`build\installer\AMDownloadSetup.exe`. Running the installer requires
+administrator approval and installs to `Program Files\AM Download`, registers an
+uninstaller, and creates Start Menu, public desktop, and Quick Launch shortcuts.
+
+## GitHub releases
+
+The GitHub Actions workflow builds the macOS app and Windows portable binary and
+installer, then attaches them to a GitHub release. Push a semantic-version tag
+to publish a release:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow can also be started manually from the Actions tab by providing a
+tag such as `v1.0.0`.
