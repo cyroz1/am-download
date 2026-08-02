@@ -32,7 +32,7 @@ if (-not (Test-Path -LiteralPath $vcVars)) {
 }
 
 $object = Join-Path $build "AMDownload.obj"
-$command = 'call "' + $vcVars + '" && rc.exe /nologo /fo"' + $resourceObject + '" "' + $resource + '" && cl.exe /nologo /std:c++20 /EHsc /W4 /O2 /Fo"' + $object + '" /Fe"' + $executable + '" "' + $source + '" "' + $resourceObject + '" /link /SUBSYSTEM:WINDOWS'
+$command = 'call "' + $vcVars + '" && rc.exe /nologo /fo"' + $resourceObject + '" "' + $resource + '" && cl.exe /nologo /utf-8 /std:c++20 /EHsc /W4 /O2 /Fo"' + $object + '" /Fe"' + $executable + '" "' + $source + '" "' + $resourceObject + '" /link /SUBSYSTEM:WINDOWS'
 & cmd.exe /d /s /c $command
 if ($LASTEXITCODE -ne 0) {
     throw "The Windows build failed with exit code $LASTEXITCODE."
@@ -45,7 +45,7 @@ if (Test-Path -LiteralPath $toolPayload) {
     Copy-Item -LiteralPath $toolPayload -Destination $toolDestination -Recurse -Force
 }
 
-$installerCommand = 'call "' + $vcVars + '" && rc.exe /nologo /fo"' + $installerResourceObject + '" "' + $installerResource + '" && cl.exe /nologo /std:c++20 /EHsc /W4 /O2 /Fo"' + $installerObject + '" /Fe"' + $installerExecutable + '" "' + $installerSource + '" "' + $installerResourceObject + '" /link /SUBSYSTEM:WINDOWS'
+$installerCommand = 'call "' + $vcVars + '" && rc.exe /nologo /fo"' + $installerResourceObject + '" "' + $installerResource + '" && cl.exe /nologo /utf-8 /std:c++20 /EHsc /W4 /O2 /Fo"' + $installerObject + '" /Fe"' + $installerExecutable + '" "' + $installerSource + '" "' + $installerResourceObject + '" /link /SUBSYSTEM:WINDOWS'
 & cmd.exe /d /s /c $installerCommand
 if ($LASTEXITCODE -ne 0) {
     throw "The installer build failed with exit code $LASTEXITCODE."

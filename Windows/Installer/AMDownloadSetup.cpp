@@ -121,6 +121,7 @@ bool CreateShortcut(const std::filesystem::path& shortcutPath, const std::filesy
     shellLink->SetPath(targetPath.c_str());
     shellLink->SetWorkingDirectory(workingDirectory.c_str());
     shellLink->SetDescription(description.c_str());
+    shellLink->SetIconLocation(targetPath.c_str(), 0);
 
     IPersistFile* persistFile = nullptr;
     result = shellLink->QueryInterface(IID_PPV_ARGS(&persistFile));

@@ -9,6 +9,8 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <uxtheme.h>
+#include <dwmapi.h>
 
 #include <algorithm>
 #include <atomic>
@@ -24,11 +26,14 @@
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "Shell32.lib")
 #pragma comment(lib, "User32.lib")
+#pragma comment(lib, "UxTheme.lib")
+#pragma comment(lib, "Dwmapi.lib")
 
 namespace {
 
 constexpr wchar_t kMainClassName[] = L"AMDownloadMainWindow";
 constexpr wchar_t kContentClassName[] = L"AMDownloadContentWindow";
+constexpr int kAppIconResource = 101;
 
 constexpr int kUrlEdit = 1001;
 constexpr int kPasteButton = 1002;
@@ -51,10 +56,14 @@ constexpr UINT kAppLogMessage = WM_APP + 1;
 constexpr UINT kAppCompleteMessage = WM_APP + 2;
 
 constexpr COLORREF kAccent = RGB(35, 121, 219);
+constexpr COLORREF kAccentHover = RGB(24, 105, 199);
 constexpr COLORREF kAccentDark = RGB(26, 86, 158);
-constexpr COLORREF kMutedText = RGB(102, 112, 125);
+constexpr COLORREF kPageBackground = RGB(246, 248, 251);
+constexpr COLORREF kHeaderBackground = RGB(249, 251, 253);
+constexpr COLORREF kCardFill = RGB(255, 255, 255);
+constexpr COLORREF kControlBorder = RGB(216, 222, 230);
+constexpr COLORREF kMutedText = RGB(96, 105, 118);
 constexpr COLORREF kWarningText = RGB(178, 102, 12);
-constexpr COLORREF kCardFill = RGB(248, 250, 253);
 constexpr COLORREF kCardBorder = RGB(224, 230, 238);
 
 struct MetadataRow {
@@ -412,8 +421,13 @@ public:
         DeleteFont(fontNormal_);
         DeleteFont(fontSmall_);
         DeleteFont(fontBold_);
+        DeleteFont(fontHeading_);
         DeleteFont(fontMono_);
         DeleteFont(fontTitle_);
+        if (headerIcon_) {
+            DestroyIcon(headerIcon_);
+            headerIcon_ = nullptr;
+        }
     }
 
     bool Create(HINSTANCE instance, int showCommand) {
@@ -428,8 +442,10 @@ public:
         mainClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         mainClass.hbrBackground = nullptr;
         mainClass.lpszClassName = kMainClassName;
-        mainClass.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-        mainClass.hIconSm = LoadIconW(nullptr, IDI_APPLICATION);
+        mainClass.hIcon = LoadIconW(instance_, MAKEINTRESOURCEW(kAppIconResource));
+        mainClass.hIconSm = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(kAppIconResource), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR));
+        if (!mainClass.hIcon) mainClass.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        if (!mainClass.hIconSm) mainClass.hIconSm = mainClass.hIcon;
         if (!RegisterClassExW(&mainClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
             return false;
         }
@@ -464,6 +480,7 @@ public:
             return false;
         }
 
+        ConfigureWindowChrome();
         ShowWindow(hwnd_, showCommand);
         UpdateWindow(hwnd_);
         return true;
@@ -625,6 +642,33 @@ private:
         }
     }
 
+    void ConfigureWindowChrome() {
+        // These attributes are ignored on older Windows versions, leaving the
+        // normal native frame in place while enabling WinUI-like chrome on
+        // Windows 11.
+        constexpr DWORD kWindowCornerPreference = 33;
+        constexpr DWORD kRoundCorners = 2;
+        DwmSetWindowAttribute(hwnd_, kWindowCornerPreference, &kRoundCorners, sizeof(kRoundCorners));
+
+        constexpr DWORD kSystemBackdropType = 38;
+        constexpr DWORD kMainWindowBackdrop = 2;
+        DwmSetWindowAttribute(hwnd_, kSystemBackdropType, &kMainWindowBackdrop, sizeof(kMainWindowBackdrop));
+    }
+
+    void ReloadHeaderIcon() {
+        if (headerIcon_) {
+            DestroyIcon(headerIcon_);
+            headerIcon_ = nullptr;
+        }
+        headerIcon_ = static_cast<HICON>(LoadImageW(
+            instance_,
+            MAKEINTRESOURCEW(kAppIconResource),
+            IMAGE_ICON,
+            Scale(48),
+            Scale(48),
+            LR_DEFAULTCOLOR));
+    }
+
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
         MainWindow* self = reinterpret_cast<MainWindow*>(GetWindowLongPtrW(window, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
@@ -683,6 +727,7 @@ private:
         case WM_DPICHANGED: {
             dpi_ = HIWORD(wParam) == 0 ? 96 : HIWORD(wParam);
             CreateFonts();
+            ReloadHeaderIcon();
             const auto* suggested = reinterpret_cast<const RECT*>(lParam);
             SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
                 suggested->right - suggested->left, suggested->bottom - suggested->top,
@@ -693,6 +738,8 @@ private:
         }
         case WM_COMMAND:
             return HandleCommand(wParam, lParam);
+        case WM_DRAWITEM:
+            return HandleDrawItem(reinterpret_cast<const DRAWITEMSTRUCT*>(lParam));
         case WM_CTLCOLOREDIT:
         case WM_CTLCOLORSTATIC:
         case WM_CTLCOLORBTN:
@@ -740,6 +787,8 @@ private:
         switch (message) {
         case WM_COMMAND:
             return HandleCommand(wParam, lParam);
+        case WM_DRAWITEM:
+            return HandleDrawItem(reinterpret_cast<const DRAWITEMSTRUCT*>(lParam));
         case WM_VSCROLL:
             ScrollFromCommand(LOWORD(wParam));
             return 0;
@@ -778,6 +827,7 @@ private:
         dpi_ = GetDpiForWindow(hwnd_);
         if (dpi_ == 0) dpi_ = 96;
         CreateFonts();
+        ReloadHeaderIcon();
         outputDirectory_ = DefaultDownloadsDirectory();
 
         contentHost_ = CreateWindowExW(
@@ -828,8 +878,8 @@ private:
             metadataRows_.push_back(row);
         }
 
-        moreTagsButton_ = CreateButton(contentHost_, L"More Apple Music tags", kMoreTagsButton, BS_AUTOCHECKBOX | BS_LEFTTEXT);
-        explicitCheck_ = CreateButton(contentHost_, L"Mark as explicit (off keeps the source value)", kExplicitCheck, BS_AUTOCHECKBOX | BS_LEFTTEXT);
+        moreTagsButton_ = CreateButton(contentHost_, L"More Apple Music tags", kMoreTagsButton, BS_AUTOCHECKBOX);
+        explicitCheck_ = CreateButton(contentHost_, L"Mark as explicit (off keeps the source value)", kExplicitCheck, BS_AUTOCHECKBOX);
 
         saveFolderLabel_ = CreateStatic(contentHost_, L"Download folder", 1160, fontSmall_);
         outputEdit_ = CreateEdit(contentHost_, outputDirectory_.c_str(), kOutputEdit, ES_READONLY | ES_AUTOHSCROLL);
@@ -849,7 +899,7 @@ private:
         RefreshDependencies();
         UpdateDetectedPlatform();
         AutoPasteSupportedUrl();
-        Layout();
+        UpdateFooterButtons();
         SetFocus(urlEdit_);
         return true;
     }
@@ -881,6 +931,7 @@ private:
             instance_,
             nullptr);
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(fontNormal_), TRUE);
+        SetWindowTheme(control, L"Explorer", nullptr);
         return control;
     }
 
@@ -889,7 +940,7 @@ private:
             0,
             L"BUTTON",
             text,
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | extraStyle,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY | extraStyle,
             0, 0, 0, 0,
             parent,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
@@ -919,15 +970,18 @@ private:
         DeleteFont(fontNormal_);
         DeleteFont(fontSmall_);
         DeleteFont(fontBold_);
+        DeleteFont(fontHeading_);
         DeleteFont(fontMono_);
         DeleteFont(fontTitle_);
 
         const int normalHeight = -MulDiv(10, dpi_, 72);
         const int smallHeight = -MulDiv(9, dpi_, 72);
+        const int headingHeight = -MulDiv(11, dpi_, 72);
         const int titleHeight = -MulDiv(20, dpi_, 72);
         fontNormal_ = CreateFontW(normalHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
         fontSmall_ = CreateFontW(smallHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
         fontBold_ = CreateFontW(normalHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+        fontHeading_ = CreateFontW(headingHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
         fontMono_ = CreateFontW(smallHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Cascadia Mono");
         fontTitle_ = CreateFontW(titleHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 
@@ -937,7 +991,7 @@ private:
         for (HWND control : {sourceHeading_, metadataHeading_, saveHeading_, activityHeading_, descriptionLabel_, supportedLabel_, urlEdit_, pasteButton_, platformLabel_, moreTagsButton_, explicitCheck_, saveFolderLabel_, outputEdit_, chooseButton_, logEdit_, statusLabel_, showDownloadsButton_, downloadButton_, cancelButton_}) {
             if (control) {
                 HFONT font = fontNormal_;
-                if (control == sourceHeading_ || control == metadataHeading_ || control == saveHeading_ || control == activityHeading_) font = fontBold_;
+                if (control == sourceHeading_ || control == metadataHeading_ || control == saveHeading_ || control == activityHeading_) font = fontHeading_;
                 if (control == descriptionLabel_ || control == supportedLabel_ || control == platformLabel_ || control == saveFolderLabel_ || control == statusLabel_) font = fontSmall_;
                 if (control == logEdit_) font = fontMono_;
                 if (control == statusLabel_) font = fontSmall_;
@@ -1066,19 +1120,19 @@ private:
         HDC dc = BeginPaint(hwnd_, &paint);
         RECT client{};
         GetClientRect(hwnd_, &client);
-        HBRUSH background = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
+        HBRUSH background = CreateSolidBrush(kPageBackground);
         FillRect(dc, &client, background);
         DeleteObject(background);
 
         const int headerHeight = Scale(88);
         const int footerHeight = Scale(60);
         RECT header{0, 0, client.right, headerHeight};
-        HBRUSH headerBrush = CreateSolidBrush(RGB(247, 250, 254));
+        HBRUSH headerBrush = CreateSolidBrush(kHeaderBackground);
         FillRect(dc, &header, headerBrush);
         DeleteObject(headerBrush);
 
         RECT footer{0, std::max(headerHeight, static_cast<int>(client.bottom - footerHeight)), client.right, client.bottom};
-        HBRUSH footerBrush = CreateSolidBrush(RGB(250, 251, 253));
+        HBRUSH footerBrush = CreateSolidBrush(kCardFill);
         FillRect(dc, &footer, footerBrush);
         DeleteObject(footerBrush);
 
@@ -1094,25 +1148,9 @@ private:
         const int iconLeft = Scale(24);
         const int iconTop = Scale(20);
         const int iconSize = Scale(48);
-        HBRUSH iconBrush = CreateSolidBrush(kAccent);
-        HGDIOBJ oldBrush = SelectObject(dc, iconBrush);
-        HPEN noPen = CreatePen(PS_NULL, 0, 0);
-        HGDIOBJ oldIconPen = SelectObject(dc, noPen);
-        Ellipse(dc, iconLeft, iconTop, iconLeft + iconSize, iconTop + iconSize);
-        SelectObject(dc, oldIconPen);
-        DeleteObject(noPen);
-        SelectObject(dc, oldBrush);
-        DeleteObject(iconBrush);
-
-        HPEN arrowPen = CreatePen(PS_SOLID, Scale(3), RGB(255, 255, 255));
-        oldPen = SelectObject(dc, arrowPen);
-        MoveToEx(dc, iconLeft + iconSize / 2, iconTop + Scale(10), nullptr);
-        LineTo(dc, iconLeft + iconSize / 2, iconTop + Scale(31));
-        MoveToEx(dc, iconLeft + Scale(15), iconTop + Scale(24), nullptr);
-        LineTo(dc, iconLeft + iconSize / 2, iconTop + Scale(33));
-        LineTo(dc, iconLeft + Scale(33), iconTop + Scale(24));
-        SelectObject(dc, oldPen);
-        DeleteObject(arrowPen);
+        if (headerIcon_) {
+            DrawIconEx(dc, iconLeft, iconTop, headerIcon_, iconSize, iconSize, 0, nullptr, DI_NORMAL);
+        }
 
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, RGB(31, 40, 53));
@@ -1133,7 +1171,7 @@ private:
         HDC dc = BeginPaint(window, &paint);
         RECT client{};
         GetClientRect(window, &client);
-        HBRUSH background = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
+        HBRUSH background = CreateSolidBrush(kPageBackground);
         FillRect(dc, &client, background);
         DeleteObject(background);
 
@@ -1183,12 +1221,119 @@ private:
         EndPaint(window, &paint);
     }
 
+    LRESULT HandleDrawItem(const DRAWITEMSTRUCT* drawItem) {
+        if (!drawItem || drawItem->CtlType != ODT_BUTTON) {
+            return 0;
+        }
+
+        const int id = static_cast<int>(drawItem->CtlID);
+        HDC dc = drawItem->hDC;
+        RECT rect = drawItem->rcItem;
+        const bool disabled = (drawItem->itemState & ODS_DISABLED) != 0;
+        const bool pressed = (drawItem->itemState & ODS_SELECTED) != 0;
+        const bool checked = SendMessageW(drawItem->hwndItem, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        const bool isCheckbox = id == kMoreTagsButton || id == kExplicitCheck;
+
+        SetBkMode(dc, TRANSPARENT);
+        HBRUSH surface = CreateSolidBrush(kCardFill);
+        FillRect(dc, &rect, surface);
+        DeleteObject(surface);
+
+        if (isCheckbox) {
+            const int boxSize = Scale(16);
+            const int left = rect.left + Scale(2);
+            const int top = rect.top + ((rect.bottom - rect.top) - boxSize) / 2;
+            RECT box{left, top, left + boxSize, top + boxSize};
+
+            if (id == kMoreTagsButton) {
+                HPEN chevronPen = CreatePen(PS_SOLID, std::max(1, Scale(1)), disabled ? kControlBorder : kAccentDark);
+                HGDIOBJ oldPen = SelectObject(dc, chevronPen);
+                const int centerX = left + boxSize / 2;
+                const int centerY = top + boxSize / 2;
+                MoveToEx(dc, centerX - Scale(3), centerY - Scale(2), nullptr);
+                if (checked) {
+                    LineTo(dc, centerX, centerY + Scale(2));
+                    LineTo(dc, centerX + Scale(3), centerY - Scale(2));
+                } else {
+                    LineTo(dc, centerX + Scale(2), centerY);
+                    LineTo(dc, centerX - Scale(2), centerY + Scale(3));
+                }
+                SelectObject(dc, oldPen);
+                DeleteObject(chevronPen);
+            } else {
+                HBRUSH boxBrush = CreateSolidBrush(checked ? kAccent : kCardFill);
+                HPEN boxPen = CreatePen(PS_SOLID, std::max(1, Scale(1)), checked ? kAccent : kControlBorder);
+                HGDIOBJ oldBrush = SelectObject(dc, boxBrush);
+                HGDIOBJ oldPen = SelectObject(dc, boxPen);
+                RoundRect(dc, box.left, box.top, box.right, box.bottom, Scale(4), Scale(4));
+                SelectObject(dc, oldPen);
+                SelectObject(dc, oldBrush);
+                DeleteObject(boxPen);
+                DeleteObject(boxBrush);
+
+                if (checked) {
+                    HPEN checkPen = CreatePen(PS_SOLID, std::max(1, Scale(2)), RGB(255, 255, 255));
+                    oldPen = SelectObject(dc, checkPen);
+                    MoveToEx(dc, left + Scale(4), top + Scale(8), nullptr);
+                    LineTo(dc, left + Scale(7), top + Scale(11));
+                    LineTo(dc, left + Scale(13), top + Scale(5));
+                    SelectObject(dc, oldPen);
+                    DeleteObject(checkPen);
+                }
+            }
+
+            RECT labelRect{left + boxSize + Scale(8), rect.top, rect.right, rect.bottom};
+            std::wstring text = ControlText(drawItem->hwndItem);
+            SetTextColor(dc, disabled ? RGB(158, 163, 170) : RGB(43, 51, 63));
+            DrawTextW(dc, text.c_str(), -1, &labelRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            return 1;
+        }
+
+        const bool primary = id == kDownloadButton;
+        const bool danger = id == kCancelButton;
+        COLORREF fillColor = kCardFill;
+        COLORREF borderColor = danger ? RGB(207, 82, 82) : kControlBorder;
+        COLORREF textColor = danger ? RGB(177, 55, 55) : RGB(43, 51, 63);
+        if (primary) {
+            fillColor = pressed ? kAccentHover : kAccent;
+            borderColor = fillColor;
+            textColor = RGB(255, 255, 255);
+        } else if (pressed) {
+            fillColor = RGB(238, 243, 249);
+        }
+        if (disabled) {
+            fillColor = RGB(242, 244, 247);
+            borderColor = RGB(225, 228, 233);
+            textColor = RGB(158, 163, 170);
+        }
+
+        HBRUSH buttonBrush = CreateSolidBrush(fillColor);
+        HPEN buttonPen = CreatePen(PS_SOLID, std::max(1, Scale(1)), borderColor);
+        HGDIOBJ oldBrush = SelectObject(dc, buttonBrush);
+        HGDIOBJ oldPen = SelectObject(dc, buttonPen);
+        RoundRect(dc, rect.left + Scale(1), rect.top + Scale(1), rect.right - Scale(1), rect.bottom - Scale(1), Scale(6), Scale(6));
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBrush);
+        DeleteObject(buttonPen);
+        DeleteObject(buttonBrush);
+
+        std::wstring text = ControlText(drawItem->hwndItem);
+        SetTextColor(dc, textColor);
+        DrawTextW(dc, text.c_str(), -1, &rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        if ((drawItem->itemState & ODS_FOCUS) != 0 && !disabled) {
+            RECT focusRect{rect.left + Scale(4), rect.top + Scale(3), rect.right - Scale(4), rect.bottom - Scale(3)};
+            DrawFocusRect(dc, &focusRect);
+        }
+        return 1;
+    }
+
     LRESULT HandleCommand(WPARAM wParam, LPARAM lParam) {
         (void)lParam;
         const int id = LOWORD(wParam);
         const int code = HIWORD(wParam);
         if (id == kUrlEdit && code == EN_CHANGE) {
             UpdateDetectedPlatform();
+            UpdateFooterButtons();
         } else if (id == kPasteButton && code == BN_CLICKED) {
             PasteUrl();
         } else if (id == kMoreTagsButton && code == BN_CLICKED) {
@@ -1372,7 +1517,8 @@ private:
     }
 
     void UpdateFooterButtons() {
-        EnableWindow(downloadButton_, !isRunning_);
+        const bool hasSource = !Trim(ControlText(urlEdit_)).empty();
+        EnableWindow(downloadButton_, !isRunning_ && hasSource);
         EnableWindow(showDownloadsButton_, !isRunning_);
         ShowWindow(cancelButton_, isRunning_ ? SW_SHOW : SW_HIDE);
         Layout();
@@ -1586,8 +1732,10 @@ private:
     HFONT fontNormal_ = nullptr;
     HFONT fontSmall_ = nullptr;
     HFONT fontBold_ = nullptr;
+    HFONT fontHeading_ = nullptr;
     HFONT fontMono_ = nullptr;
     HFONT fontTitle_ = nullptr;
+    HICON headerIcon_ = nullptr;
     UINT dpi_ = 96;
 
     std::wstring outputDirectory_;
