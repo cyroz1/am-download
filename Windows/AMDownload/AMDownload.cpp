@@ -594,7 +594,7 @@ public:
         AddTagOverride(tagOverrides, L"--year", metadataRows_[6].edit);
         AddTagOverride(tagOverrides, L"--tracknum", metadataRows_[7].edit);
         AddTagOverride(tagOverrides, L"--disk", metadataRows_[8].edit);
-        if (SendMessageW(explicitCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+        if (explicitChecked_) {
             tagOverrides.emplace_back(L"--advisory", L"explicit");
         }
 
@@ -909,8 +909,8 @@ private:
             metadataRows_.push_back(row);
         }
 
-        moreTagsButton_ = CreateButton(contentHost_, L"More Apple Music tags", kMoreTagsButton, BS_AUTOCHECKBOX);
-        explicitCheck_ = CreateButton(contentHost_, L"Mark as explicit (off keeps the source value)", kExplicitCheck, BS_AUTOCHECKBOX);
+        moreTagsButton_ = CreateButton(contentHost_, L"More Apple Music tags", kMoreTagsButton);
+        explicitCheck_ = CreateButton(contentHost_, L"Mark as explicit (off keeps the source value)", kExplicitCheck);
 
         saveFolderLabel_ = CreateStatic(contentHost_, L"Download folder", 1160, fontSmall_);
         outputEdit_ = CreateEdit(contentHost_, outputDirectory_.c_str(), kOutputEdit, ES_READONLY | ES_AUTOHSCROLL);
@@ -1141,9 +1141,8 @@ private:
         contentHeight_ = activityTop + Scale(40) + logHeight + Scale(28);
         UpdateScrollBar();
 
-        if (moreTagsButton_) {
-            SendMessageW(moreTagsButton_, BM_SETCHECK, moreTagsExpanded_ ? BST_CHECKED : BST_UNCHECKED, 0);
-        }
+        if (moreTagsButton_) InvalidateRect(moreTagsButton_, nullptr, TRUE);
+        if (explicitCheck_) InvalidateRect(explicitCheck_, nullptr, TRUE);
         InvalidateRect(contentHost_, nullptr, FALSE);
     }
 
@@ -1289,8 +1288,8 @@ private:
         RECT rect = drawItem->rcItem;
         const bool disabled = (drawItem->itemState & ODS_DISABLED) != 0;
         const bool pressed = (drawItem->itemState & ODS_SELECTED) != 0;
-        const bool checked = SendMessageW(drawItem->hwndItem, BM_GETCHECK, 0, 0) == BST_CHECKED;
         const bool isCheckbox = id == kMoreTagsButton || id == kExplicitCheck;
+        const bool checked = id == kMoreTagsButton ? moreTagsExpanded_ : (id == kExplicitCheck && explicitChecked_);
 
         SetBkMode(dc, TRANSPARENT);
         HBRUSH surface = CreateSolidBrush(kCardFill);
@@ -1395,8 +1394,11 @@ private:
         } else if (id == kPasteButton && code == BN_CLICKED) {
             PasteUrl();
         } else if (id == kMoreTagsButton && code == BN_CLICKED) {
-            moreTagsExpanded_ = SendMessageW(moreTagsButton_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            moreTagsExpanded_ = !moreTagsExpanded_;
             LayoutContent();
+        } else if (id == kExplicitCheck && code == BN_CLICKED) {
+            explicitChecked_ = !explicitChecked_;
+            InvalidateRect(explicitCheck_, nullptr, TRUE);
         } else if (id == kChooseButton && code == BN_CLICKED) {
             ChooseOutputDirectory();
         } else if (id == kDownloadButton && code == BN_CLICKED) {
@@ -1823,6 +1825,8 @@ private:
     std::vector<MetadataRow> metadataRows_;
     HWND moreTagsButton_ = nullptr;
     HWND explicitCheck_ = nullptr;
+    bool moreTagsExpanded_ = false;
+    bool explicitChecked_ = false;
     HWND saveFolderLabel_ = nullptr;
     HWND outputEdit_ = nullptr;
     HWND chooseButton_ = nullptr;
@@ -1848,7 +1852,6 @@ private:
     std::wstring ffmpegPath_;
     std::wstring atomicParsleyPath_;
     std::vector<std::wstring> missingDependencies_;
-    bool moreTagsExpanded_ = false;
     bool isRunning_ = false;
     int scrollOffset_ = 0;
     int wheelDeltaRemainder_ = 0;
