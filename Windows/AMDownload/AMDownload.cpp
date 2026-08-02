@@ -708,6 +708,18 @@ private:
         return DefSubclassProc(window, message, wParam, lParam);
     }
 
+    static LRESULT CALLBACK ScrollWheelSubclassProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR data) {
+        auto* self = reinterpret_cast<MainWindow*>(data);
+        if (message == WM_MOUSEWHEEL) {
+            self->HandleMouseWheel(wParam);
+            return 0;
+        }
+        if (message == WM_NCDESTROY) {
+            RemoveWindowSubclass(window, &MainWindow::ScrollWheelSubclassProc, 2);
+        }
+        return DefSubclassProc(window, message, wParam, lParam);
+    }
+
     LRESULT HandleWindowMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         switch (message) {
         case WM_CREATE:
@@ -793,7 +805,7 @@ private:
             ScrollFromCommand(LOWORD(wParam));
             return 0;
         case WM_MOUSEWHEEL:
-            ScrollContentTo(scrollOffset_ - GET_WHEEL_DELTA_WPARAM(wParam) * Scale(3) / WHEEL_DELTA);
+            HandleMouseWheel(wParam);
             return 0;
         case WM_KEYDOWN:
             if (wParam == VK_PRIOR) {
@@ -916,6 +928,9 @@ private:
             instance_,
             nullptr);
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        if (parent == contentHost_) {
+            SetWindowSubclass(control, &MainWindow::ScrollWheelSubclassProc, 2, reinterpret_cast<DWORD_PTR>(this));
+        }
         return control;
     }
 
@@ -932,6 +947,9 @@ private:
             nullptr);
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(fontNormal_), TRUE);
         SetWindowTheme(control, L"Explorer", nullptr);
+        if (parent == contentHost_ && id != kLogEdit) {
+            SetWindowSubclass(control, &MainWindow::ScrollWheelSubclassProc, 2, reinterpret_cast<DWORD_PTR>(this));
+        }
         return control;
     }
 
@@ -947,6 +965,9 @@ private:
             instance_,
             nullptr);
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(fontNormal_), TRUE);
+        if (parent == contentHost_) {
+            SetWindowSubclass(control, &MainWindow::ScrollWheelSubclassProc, 2, reinterpret_cast<DWORD_PTR>(this));
+        }
         return control;
     }
 
@@ -1002,7 +1023,7 @@ private:
             if (row.label) SendMessageW(row.label, WM_SETFONT, reinterpret_cast<WPARAM>(fontSmall_), TRUE);
             if (row.edit) SendMessageW(row.edit, WM_SETFONT, reinterpret_cast<WPARAM>(fontNormal_), TRUE);
         }
-        InvalidateRect(hwnd_, nullptr, TRUE);
+        InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
     void Layout() {
@@ -1039,7 +1060,7 @@ private:
 
         MoveWindow(statusLabel_, margin, footerTop + Scale(18), std::max(80, right - margin - gap), Scale(24), TRUE);
         LayoutContent();
-        InvalidateRect(hwnd_, nullptr, TRUE);
+        InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
     void LayoutContent() {
@@ -1099,20 +1120,12 @@ private:
         MoveWindow(logEdit_, pad + Scale(12), activityTop - scrollOffset_ + Scale(40), width - 2 * pad - Scale(24), logHeight, TRUE);
 
         contentHeight_ = activityTop + Scale(40) + logHeight + Scale(28);
-        const int viewportHeight = std::max(0, static_cast<int>(client.bottom - client.top));
-        const int maxScroll = std::max(0, contentHeight_ - viewportHeight);
-        scrollOffset_ = std::clamp(scrollOffset_, 0, maxScroll);
-        SCROLLINFO scrollInfo{sizeof(scrollInfo), SIF_RANGE | SIF_PAGE | SIF_POS};
-        scrollInfo.nMin = 0;
-        scrollInfo.nMax = std::max(0, contentHeight_ - 1);
-        scrollInfo.nPage = static_cast<UINT>(viewportHeight);
-        scrollInfo.nPos = scrollOffset_;
-        SetScrollInfo(contentHost_, SB_VERT, &scrollInfo, TRUE);
+        UpdateScrollBar();
 
         if (moreTagsButton_) {
             SendMessageW(moreTagsButton_, BM_SETCHECK, moreTagsExpanded_ ? BST_CHECKED : BST_UNCHECKED, 0);
         }
-        InvalidateRect(contentHost_, nullptr, TRUE);
+        InvalidateRect(contentHost_, nullptr, FALSE);
     }
 
     void PaintWindow() {
@@ -1168,14 +1181,34 @@ private:
 
     void PaintContent(HWND window) {
         PAINTSTRUCT paint{};
-        HDC dc = BeginPaint(window, &paint);
+        HDC paintDc = BeginPaint(window, &paint);
         RECT client{};
         GetClientRect(window, &client);
+        const int width = client.right - client.left;
+        const int height = client.bottom - client.top;
+
+        HDC bufferDc = nullptr;
+        HBITMAP bufferBitmap = nullptr;
+        HGDIOBJ oldBitmap = nullptr;
+        HDC dc = paintDc;
+        if (width > 0 && height > 0) {
+            bufferDc = CreateCompatibleDC(paintDc);
+            if (bufferDc) {
+                bufferBitmap = CreateCompatibleBitmap(paintDc, width, height);
+                if (bufferBitmap) {
+                    oldBitmap = SelectObject(bufferDc, bufferBitmap);
+                    dc = bufferDc;
+                } else {
+                    DeleteDC(bufferDc);
+                    bufferDc = nullptr;
+                }
+            }
+        }
+
         HBRUSH background = CreateSolidBrush(kPageBackground);
         FillRect(dc, &client, background);
         DeleteObject(background);
 
-        const int width = client.right - client.left;
         const int pad = Scale(24);
         const int sourceTop = Scale(18) - scrollOffset_;
         const int sourceBottom = Scale(154) - scrollOffset_;
@@ -1218,6 +1251,12 @@ private:
         drawAccent(saveTop);
         drawAccent(activityTop);
 
+        if (bufferBitmap) {
+            BitBlt(paintDc, 0, 0, width, height, bufferDc, 0, 0, SRCCOPY);
+            SelectObject(bufferDc, oldBitmap);
+            DeleteObject(bufferBitmap);
+            DeleteDC(bufferDc);
+        }
         EndPaint(window, &paint);
     }
 
@@ -1372,6 +1411,44 @@ private:
         return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
     }
 
+    int WheelScrollDistance() const {
+        UINT lines = 3;
+        SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
+        if (lines == WHEEL_PAGESCROLL) {
+            return GetContentViewportHeight();
+        }
+        lines = std::clamp(lines, 1u, 8u);
+        return Scale(38) * static_cast<int>(lines);
+    }
+
+    void HandleMouseWheel(WPARAM wParam) {
+        wheelDeltaRemainder_ += GET_WHEEL_DELTA_WPARAM(wParam);
+        const int notches = wheelDeltaRemainder_ / WHEEL_DELTA;
+        if (notches == 0) {
+            return;
+        }
+        wheelDeltaRemainder_ -= notches * WHEEL_DELTA;
+        ScrollContentTo(scrollOffset_ - notches * WheelScrollDistance());
+    }
+
+    void UpdateScrollBar() {
+        if (!contentHost_) {
+            return;
+        }
+        RECT client{};
+        GetClientRect(contentHost_, &client);
+        const int viewportHeight = std::max(0, static_cast<int>(client.bottom - client.top));
+        const int maxScroll = std::max(0, contentHeight_ - viewportHeight);
+        scrollOffset_ = std::clamp(scrollOffset_, 0, maxScroll);
+
+        SCROLLINFO scrollInfo{sizeof(scrollInfo), SIF_RANGE | SIF_PAGE | SIF_POS};
+        scrollInfo.nMin = 0;
+        scrollInfo.nMax = std::max(0, contentHeight_ - 1);
+        scrollInfo.nPage = static_cast<UINT>(viewportHeight);
+        scrollInfo.nPos = scrollOffset_;
+        SetScrollInfo(contentHost_, SB_VERT, &scrollInfo, TRUE);
+    }
+
     void ScrollFromCommand(int command) {
         SCROLLINFO info{sizeof(info), SIF_ALL};
         GetScrollInfo(contentHost_, SB_VERT, &info);
@@ -1392,8 +1469,16 @@ private:
 
     void ScrollContentTo(int position) {
         const int maxScroll = std::max(0, contentHeight_ - GetContentViewportHeight());
-        scrollOffset_ = std::clamp(position, 0, maxScroll);
-        LayoutContent();
+        const int next = std::clamp(position, 0, maxScroll);
+        if (next == scrollOffset_ || !contentHost_) {
+            return;
+        }
+
+        const int scrollDelta = scrollOffset_ - next;
+        scrollOffset_ = next;
+        ScrollWindowEx(contentHost_, 0, scrollDelta, nullptr, nullptr, nullptr, nullptr,
+            SW_SCROLLCHILDREN | SW_INVALIDATE);
+        UpdateScrollBar();
     }
 
     std::wstring ControlText(HWND control) const {
@@ -1423,7 +1508,7 @@ private:
             SetWindowTextW(platformLabel_, (platform + L" link detected").c_str());
             ShowWindow(platformLabel_, SW_SHOW);
         }
-        InvalidateRect(contentHost_, nullptr, TRUE);
+        InvalidateRect(contentHost_, nullptr, FALSE);
     }
 
     void PasteUrl() {
@@ -1747,6 +1832,7 @@ private:
     bool moreTagsExpanded_ = false;
     bool isRunning_ = false;
     int scrollOffset_ = 0;
+    int wheelDeltaRemainder_ = 0;
     int contentHeight_ = 0;
 
     std::thread downloadWorker_;
