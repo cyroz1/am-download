@@ -534,6 +534,9 @@ public:
             return;
         }
 
+        const std::wstring lowerUrl = Lowercase(url);
+        const bool isSingleSource = lowerUrl.find(L"/sets/") == std::wstring::npos;
+
         std::vector<std::wstring> arguments = {
             L"--newline",
             L"--progress",
@@ -543,6 +546,8 @@ public:
             L"--extract-audio",
             L"--audio-format", L"m4a",
             L"--audio-quality", L"0",
+            L"--parse-metadata", L"%(release_year,release_date>%Y,upload_date>%Y|)s:%(meta_date)s",
+            L"--parse-metadata", L"%(genre,genres,categories,tags|)l:%(meta_genre)s",
             L"--embed-thumbnail",
             L"--embed-metadata",
             L"--embed-chapters",
@@ -551,7 +556,11 @@ public:
             L"--print", L"after_move:__AM_FILE__:%(filepath)s"
         };
 
-        const std::wstring lowerUrl = Lowercase(url);
+        if (isSingleSource) {
+            arguments.push_back(L"--parse-metadata");
+            arguments.push_back(L"%(album,series,title)s:%(meta_album)s");
+        }
+
         const std::wstring outputTemplate =
             (lowerUrl.find(L"instagram.com") != std::wstring::npos
                 || lowerUrl.find(L"instagr.am") != std::wstring::npos
@@ -568,7 +577,17 @@ public:
         std::vector<std::pair<std::wstring, std::wstring>> tagOverrides;
         AddTagOverride(tagOverrides, L"--title", metadataRows_[0].edit);
         AddTagOverride(tagOverrides, L"--artist", metadataRows_[1].edit);
-        AddTagOverride(tagOverrides, L"--album", metadataRows_[2].edit);
+
+        const std::wstring albumOverride = Trim(ControlText(metadataRows_[2].edit));
+        if (!albumOverride.empty()) {
+            tagOverrides.emplace_back(L"--album", albumOverride);
+        } else if (isSingleSource) {
+            const std::wstring titleOverride = Trim(ControlText(metadataRows_[0].edit));
+            if (!titleOverride.empty()) {
+                tagOverrides.emplace_back(L"--album", titleOverride);
+            }
+        }
+
         AddTagOverride(tagOverrides, L"--albumArtist", metadataRows_[3].edit);
         AddTagOverride(tagOverrides, L"--genre", metadataRows_[4].edit);
         AddTagOverride(tagOverrides, L"--composer", metadataRows_[5].edit);
@@ -877,7 +896,7 @@ private:
             {L"Album Artist", L"Keep source value"},
             {L"Genre", L"Keep source value"},
             {L"Composer", L"Keep source value"},
-            {L"Release Date", L"Keep source value (e.g. 2026)"},
+            {L"Release Year", L"Keep source year (e.g. 2026)"},
             {L"Track", L"Keep source value (e.g. 3/12)"},
             {L"Disc", L"Keep source value (e.g. 1/2)"}
         };

@@ -105,7 +105,7 @@ struct ContentView: View {
             DisclosureGroup("More Apple Music tags", isExpanded: $model.showMoreTags) {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
                     metadataRow("Composer", text: $model.composer)
-                    metadataRow("Release Date", text: $model.releaseDate, prompt: "Keep source value (e.g. 2026)")
+                    metadataRow("Release Year", text: $model.releaseDate, prompt: "Keep source year (e.g. 2026)")
                     metadataRow("Track", text: $model.trackNumber, prompt: "Keep source value (e.g. 3/12)")
                     metadataRow("Disc", text: $model.discNumber, prompt: "Keep source value (e.g. 1/2)")
                 }
@@ -312,6 +312,9 @@ final class DownloadModel: ObservableObject {
             return
         }
 
+        let lowercasedURL = sourceURL.lowercased()
+        let isSingleSource = !lowercasedURL.contains("/sets/")
+
         var arguments = [
             "--newline",
             "--progress",
@@ -319,6 +322,8 @@ final class DownloadModel: ObservableObject {
             "--extract-audio",
             "--audio-format", "m4a",
             "--audio-quality", "0",
+            "--parse-metadata", "%(release_year,release_date>%Y,upload_date>%Y|)s:%(meta_date)s",
+            "--parse-metadata", "%(genre,genres,categories,tags|)l:%(meta_genre)s",
             "--embed-thumbnail",
             "--embed-metadata",
             "--embed-chapters",
@@ -326,7 +331,12 @@ final class DownloadModel: ObservableObject {
             "--ffmpeg-location", ffmpeg.deletingLastPathComponent().path
         ]
 
-        let lowercasedURL = sourceURL.lowercased()
+        if isSingleSource {
+            arguments += [
+                "--parse-metadata", "%(album,series,title)s:%(meta_album)s"
+            ]
+        }
+
         let outputTemplate: String
         if lowercasedURL.contains("instagram.com") || lowercasedURL.contains("instagr.am")
             || lowercasedURL.contains("x.com") || lowercasedURL.contains("twitter.com") {
@@ -340,7 +350,11 @@ final class DownloadModel: ObservableObject {
         var tagArguments: [(String, String)] = []
         if !title.isEmpty { tagArguments.append(("--title", title)) }
         if !artist.isEmpty { tagArguments.append(("--artist", artist)) }
-        if !album.isEmpty { tagArguments.append(("--album", album)) }
+        if !album.isEmpty {
+            tagArguments.append(("--album", album))
+        } else if isSingleSource && !title.isEmpty {
+            tagArguments.append(("--album", title))
+        }
         if !albumArtist.isEmpty { tagArguments.append(("--albumArtist", albumArtist)) }
         if !genre.isEmpty { tagArguments.append(("--genre", genre)) }
         if !composer.isEmpty { tagArguments.append(("--composer", composer)) }

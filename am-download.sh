@@ -93,6 +93,18 @@ if [[ "$(echo "$meta_answer" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
     read -rp "  Album artist (leave blank to skip): " META_ALBUM_ARTIST
 fi
 
+METADATA_ARGS=(
+    --parse-metadata "%(release_year,release_date>%Y,upload_date>%Y|)s:%(meta_date)s"
+    --parse-metadata "%(genre,genres,categories,tags|)l:%(meta_genre)s"
+)
+
+if [[ "$URL" != *"/sets/"* ]]; then
+    METADATA_ARGS+=(--parse-metadata "%(album,series,title)s:%(meta_album)s")
+    if [[ -z "$META_ALBUM" && -n "$META_TITLE" ]]; then
+        META_ALBUM="$META_TITLE"
+    fi
+fi
+
 read -rp "Mark as explicit? [y/N] " explicit_answer
 EXPLICIT="no"
 [[ "$(echo "$explicit_answer" | tr '[:upper:]' '[:lower:]')" == "y" ]] && EXPLICIT="yes"
@@ -131,6 +143,7 @@ yt-dlp \
     --embed-metadata \
     --embed-chapters \
     --add-metadata \
+    "${METADATA_ARGS[@]}" \
     "${EXPLICIT_ARGS[@]}" \
     --output "$OUTPUT_TMPL" \
     "$URL"

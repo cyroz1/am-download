@@ -22,7 +22,7 @@
 namespace {
 
 constexpr wchar_t kProductName[] = L"AM Download";
-constexpr wchar_t kProductVersion[] = L"1.0.3";
+constexpr wchar_t kProductVersion[] = L"1.0.4";
 constexpr wchar_t kUninstallKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AM Download";
 constexpr int kApplicationPayloadResource = 200;
 
