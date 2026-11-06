@@ -19,6 +19,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #pragma comment(lib, "Comctl32.lib")
@@ -165,7 +166,10 @@ std::vector<std::wstring> SearchDirectories() {
 }
 
 std::wstring FindExecutable(const std::wstring& baseName) {
-    std::vector<std::wstring> names = {baseName, baseName + L".exe"};
+    // CreateProcessW appends .exe to an extensionless lpApplicationName, so
+    // the .exe file is the image that actually runs; check for it first so
+    // the file verified here is the file that gets mapped.
+    std::vector<std::wstring> names = {baseName + L".exe", baseName};
     for (const auto& directory : SearchDirectories()) {
         for (const auto& name : names) {
             const std::filesystem::path candidate = std::filesystem::path(directory) / name;
@@ -377,14 +381,38 @@ std::wstring WindowsErrorMessage(DWORD error) {
     return Trim(result);
 }
 
+bool IsPathWithinDirectory(const std::filesystem::path& candidate, const std::filesystem::path& directory) {
+    auto candidatePart = candidate.begin();
+    for (auto directoryPart = directory.begin(); directoryPart != directory.end(); ++directoryPart, ++candidatePart) {
+        if (candidatePart == candidate.end()
+            || Lowercase(candidatePart->wstring()) != Lowercase(directoryPart->wstring())) {
+            return false;
+        }
+    }
+    return candidatePart != candidate.end();
+}
+
 std::vector<std::wstring> OutputFilesFromLog(const std::string& output, const std::wstring& workingDirectory) {
     constexpr char marker[] = "__AM_FILE__:";
+    std::error_code baseError;
+    const std::filesystem::path baseDirectory =
+        std::filesystem::weakly_canonical(std::filesystem::path(workingDirectory), baseError);
+    if (baseError) {
+        return {};
+    }
     std::vector<std::wstring> files;
     std::size_t searchFrom = 0;
     while (searchFrom < output.size()) {
         const std::size_t markerPosition = output.find(marker, searchFrom);
         if (markerPosition == std::string::npos) {
             break;
+        }
+        // yt-dlp prints one marker per line. A marker appearing mid-line is
+        // part of some other text in the merged output stream (which includes
+        // remote-controlled metadata) and must not be treated as a file path.
+        if (markerPosition != 0 && output[markerPosition - 1] != '\n') {
+            searchFrom = markerPosition + 1;
+            continue;
         }
         const std::size_t fileStart = markerPosition + sizeof(marker) - 1;
         std::size_t fileEnd = output.find_first_of("\r\n", fileStart);
@@ -397,11 +425,22 @@ std::vector<std::wstring> OutputFilesFromLog(const std::string& output, const st
         if (!rawPath.empty()) {
             std::filesystem::path path(Utf8ToWide(rawPath));
             if (path.is_relative()) {
-                path = std::filesystem::path(workingDirectory) / path;
+                path = baseDirectory / path;
             }
-            const std::wstring normalized = path.lexically_normal().wstring();
-            if (std::find(files.begin(), files.end(), normalized) == files.end()) {
-                files.push_back(normalized);
+            std::error_code pathError;
+            path = std::filesystem::weakly_canonical(path, pathError);
+            // Each accepted path is handed to AtomicParsley with --overWrite,
+            // so only accept files the download could have produced: an M4A
+            // file that actually exists inside the output folder.
+            std::error_code statusError;
+            if (!pathError
+                && IsPathWithinDirectory(path, baseDirectory)
+                && Lowercase(path.extension().wstring()) == L".m4a"
+                && std::filesystem::is_regular_file(path, statusError)) {
+                const std::wstring normalized = path.wstring();
+                if (std::find(files.begin(), files.end(), normalized) == files.end()) {
+                    files.push_back(normalized);
+                }
             }
         }
         searchFrom = fileEnd + 1;
@@ -572,6 +611,7 @@ public:
                 : L"%(title)s.%(ext)s");
         arguments.push_back(L"--output");
         arguments.push_back(outputTemplate);
+        arguments.push_back(L"--");
         arguments.push_back(url);
 
         std::vector<std::pair<std::wstring, std::wstring>> tagOverrides;
@@ -782,15 +822,18 @@ private:
             return 1;
         case kAppLogMessage: {
             auto* text = reinterpret_cast<std::wstring*>(lParam);
-            if (text) {
+            if (text && TakePostedPayload(pendingLogPayloads_, text)) {
                 AppendLog(*text);
                 delete text;
             }
+            // Window messages carry no sender authentication, so an lParam
+            // this app did not hand out itself is never dereferenced or
+            // deleted; another process could have posted it.
             return 0;
         }
         case kAppCompleteMessage: {
             auto* result = reinterpret_cast<DownloadResult*>(lParam);
-            if (result) {
+            if (result && TakePostedPayload(pendingCompletePayloads_, result)) {
                 FinishDownload(*result);
                 delete result;
             }
@@ -1774,16 +1817,32 @@ private:
         return true;
     }
 
+    template <typename T>
+    bool RegisterPostedPayload(std::unordered_set<const T*>& payloads, const T* payload) {
+        std::lock_guard<std::mutex> lock(payloadMutex_);
+        return payloads.insert(payload).second;
+    }
+
+    template <typename T>
+    bool TakePostedPayload(std::unordered_set<const T*>& payloads, const T* payload) {
+        std::lock_guard<std::mutex> lock(payloadMutex_);
+        return payloads.erase(payload) != 0;
+    }
+
     void PostLog(const std::wstring& text) {
         auto* copy = new std::wstring(text);
+        RegisterPostedPayload(pendingLogPayloads_, copy);
         if (!PostMessageW(hwnd_, kAppLogMessage, 0, reinterpret_cast<LPARAM>(copy))) {
+            TakePostedPayload(pendingLogPayloads_, copy);
             delete copy;
         }
     }
 
     void PostComplete(DWORD exitCode, bool cancelled) {
         auto* result = new DownloadResult{exitCode, cancelled};
+        RegisterPostedPayload(pendingCompletePayloads_, result);
         if (!PostMessageW(hwnd_, kAppCompleteMessage, 0, reinterpret_cast<LPARAM>(result))) {
+            TakePostedPayload(pendingCompletePayloads_, result);
             delete result;
         }
     }
@@ -1859,6 +1918,9 @@ private:
 
     std::thread downloadWorker_;
     std::mutex processMutex_;
+    std::mutex payloadMutex_;
+    std::unordered_set<const std::wstring*> pendingLogPayloads_;
+    std::unordered_set<const DownloadResult*> pendingCompletePayloads_;
     HANDLE currentProcess_ = nullptr;
     HANDLE currentJob_ = nullptr;
     std::atomic_bool cancelRequested_{false};
