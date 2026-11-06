@@ -318,6 +318,11 @@ final class DownloadModel: ObservableObject {
         var arguments = [
             "--newline",
             "--progress",
+            // Remote titles become filenames (and a directory for playlists);
+            // restrict them to safe filename characters so separators and dot
+            // segments in metadata cannot aim the output outside the chosen
+            // folder, which is the child process working directory.
+            "--restrict-filenames",
             "--format", "bestaudio[ext=m4a]/bestaudio[ext=aac]/bestaudio/best",
             "--extract-audio",
             "--audio-format", "m4a",
@@ -371,7 +376,7 @@ final class DownloadModel: ObservableObject {
             arguments += ["--exec", "after_move:\(command)"]
         }
 
-        arguments += ["--output", outputTemplate, sourceURL]
+        arguments += ["--output", outputTemplate, "--", sourceURL]
 
         let task = Process()
         let pipe = Pipe()
@@ -445,7 +450,9 @@ final class DownloadModel: ObservableObject {
             "/Library/Frameworks/Python.framework/Versions/3.12/bin"
         ]
         if let existing = ProcessInfo.processInfo.environment["PATH"] {
-            paths.append(contentsOf: existing.split(separator: ":").map(String.init))
+            // Drop relative PATH entries: they would resolve against
+            // whatever directory the app happened to be launched from.
+            paths.append(contentsOf: existing.split(separator: ":").map(String.init).filter { $0.hasPrefix("/") })
         }
         return Array(NSOrderedSet(array: paths)) as? [String] ?? paths
     }
