@@ -71,9 +71,36 @@ bool EnsureDirectory(const std::filesystem::path& path, std::wstring& errorMessa
     return true;
 }
 
-bool CopyDirectory(const std::filesystem::path& source, const std::filesystem::path& destination, std::wstring& errorMessage) {
+bool IsAllowedToolFile(const std::filesystem::path& path) {
+    // The installer runs elevated and the installed app executes the tools in
+    // this folder ahead of PATH, so only the executables the app actually
+    // launches (and the shared libraries a stock tool build ships next to
+    // them) may be copied out of the folder sitting beside the installer.
+    // Anything else dropped next to the installer stays behind.
+    const std::wstring extension = Lowercase(path.extension().wstring());
+    if (extension == L".dll") {
+        return true;
+    }
+    if (extension != L".exe") {
+        return false;
+    }
+    const std::wstring name = Lowercase(path.filename().wstring());
+    return name == L"yt-dlp.exe"
+        || name == L"ffmpeg.exe"
+        || name == L"ffprobe.exe"
+        || name == L"atomicparsley.exe";
+}
+
+bool CopyToolsDirectory(const std::filesystem::path& source, const std::filesystem::path& destination,
+    std::wstring& errorMessage, int depth = 0) {
     if (!std::filesystem::exists(source)) {
         return true;
+    }
+    // Bound the recursion so a pathologically nested tools tree cannot
+    // exhaust this elevated process's stack.
+    if (depth > 8) {
+        errorMessage = L"The tools folder is nested too deeply:\n\n" + source.wstring();
+        return false;
     }
     if (!EnsureDirectory(destination, errorMessage)) {
         return false;
@@ -87,10 +114,10 @@ bool CopyDirectory(const std::filesystem::path& source, const std::filesystem::p
         }
         const auto destinationPath = destination / entry.path().filename();
         if (entry.is_directory(iteratorError)) {
-            if (!CopyDirectory(entry.path(), destinationPath, errorMessage)) {
+            if (!CopyToolsDirectory(entry.path(), destinationPath, errorMessage, depth + 1)) {
                 return false;
             }
-        } else if (entry.is_regular_file(iteratorError)) {
+        } else if (entry.is_regular_file(iteratorError) && IsAllowedToolFile(entry.path())) {
             if (!CopyFileW(entry.path().c_str(), destinationPath.c_str(), FALSE)) {
                 errorMessage = L"Could not copy:\n\n" + entry.path().wstring() + L"\n\nWindows error " + std::to_wstring(GetLastError());
                 return false;
@@ -231,7 +258,7 @@ bool Install(HINSTANCE instance, std::wstring& errorMessage) {
     }
 
     const auto sourceTools = sourceDirectory / L"tools";
-    if (!CopyDirectory(sourceTools, targetDirectory / L"tools", errorMessage)) {
+    if (!CopyToolsDirectory(sourceTools, targetDirectory / L"tools", errorMessage)) {
         return false;
     }
     if (!CopyFileW(sourceInstaller.c_str(), targetUninstaller.c_str(), FALSE)) {
