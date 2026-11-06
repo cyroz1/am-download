@@ -581,6 +581,10 @@ public:
             L"--progress",
             L"--no-colors",
             L"--windows-filenames",
+            // Match the other front ends: sanitize remote playlist/title
+            // metadata into safe filename characters before it becomes the
+            // output path under the download folder.
+            L"--restrict-filenames",
             L"--format", L"bestaudio[ext=m4a]/bestaudio[ext=aac]/bestaudio/best",
             L"--extract-audio",
             L"--audio-format", L"m4a",
