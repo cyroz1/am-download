@@ -56,6 +56,13 @@ check_deps() {
 
 URL="$1"
 
+# Match the app front ends: only web URLs may reach yt-dlp, and the URL is
+# passed after a -- separator below so it can never be read as an option.
+if [[ "$URL" != http://* && "$URL" != https://* ]]; then
+    echo -e "${RED}URL must start with http:// or https://${NC}"
+    exit 1
+fi
+
 PLATFORM="unknown"
 if [[ "$URL" == *"soundcloud.com"* ]]; then
     PLATFORM="soundcloud"
@@ -143,9 +150,11 @@ yt-dlp \
     --embed-metadata \
     --embed-chapters \
     --add-metadata \
+    --restrict-filenames \
     "${METADATA_ARGS[@]}" \
     "${EXPLICIT_ARGS[@]}" \
     --output "$OUTPUT_TMPL" \
+    -- \
     "$URL"
 
 echo ""
